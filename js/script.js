@@ -4,25 +4,87 @@
 
 class TaskManager {
     constructor() {
+        this.checkAuth();
         this.tasks = this.loadTasks();
+        this.searchQuery = '';
+        this.filterPriority = 'all';
         this.init();
     }
 
     init() {
-        this.renderDashboard();
-        this.renderAllTasks();
-        this.renderTimetable();
-        this.setupEventListeners();
+        this.loadTheme();
+
+        // Only run dashboard logic if dashboard elements exist
+        if (document.getElementById('dashboard-section')) {
+            this.renderDashboard();
+            this.renderAllTasks();
+            this.renderTimetable();
+            this.setupEventListeners();
+        }
+    }
+
+    // Auth
+    checkAuth() {
+        // If we are on dashboard, check for user
+        const isDashboard = window.location.pathname.includes('dashboard.html');
+        const user = localStorage.getItem('myStudyPlanUser');
+
+        if (isDashboard && !user) {
+            window.location.href = 'index.html';
+        }
+    }
+
+    login(email) {
+        if (!email) return;
+        localStorage.setItem('myStudyPlanUser', email);
+        window.location.href = 'dashboard.html';
+    }
+
+    logout() {
+        localStorage.removeItem('myStudyPlanUser');
+        window.location.href = 'index.html';
     }
 
     // LocalStorage Operations
     loadTasks() {
-        const tasks = localStorage.getItem('myStudyPlanTasks');
+        const currentUser = localStorage.getItem('myStudyPlanUser');
+        if (!currentUser) return [];
+
+        const tasks = localStorage.getItem(`myStudyPlanTasks_${currentUser}`);
         return tasks ? JSON.parse(tasks) : [];
     }
 
     saveTasks() {
-        localStorage.setItem('myStudyPlanTasks', JSON.stringify(this.tasks));
+        const currentUser = localStorage.getItem('myStudyPlanUser');
+        if (currentUser) {
+            localStorage.setItem(`myStudyPlanTasks_${currentUser}`, JSON.stringify(this.tasks));
+        }
+    }
+
+    loadTheme() {
+        const theme = localStorage.getItem('myStudyPlanTheme') || 'dark';
+        const checkbox = document.getElementById('themeToggleCheckbox');
+
+        // Default is Dark. If "light" is saved:
+        if (theme === 'light') {
+            document.body.classList.add('light-mode');
+            if (checkbox) checkbox.checked = true;
+        } else {
+            if (checkbox) checkbox.checked = false;
+        }
+    }
+
+    toggleTheme() {
+        // Toggle logic based on checkbox state
+        const checkbox = document.getElementById('themeToggleCheckbox');
+
+        if (checkbox.checked) {
+            document.body.classList.add('light-mode');
+            localStorage.setItem('myStudyPlanTheme', 'light');
+        } else {
+            document.body.classList.remove('light-mode');
+            localStorage.setItem('myStudyPlanTheme', 'dark');
+        }
     }
 
     // Task CRUD Operations
@@ -103,8 +165,16 @@ class TaskManager {
     }
 
     renderAllTasks() {
+        // Filter tasks
+        let filteredTasks = this.tasks.filter(task => {
+            const matchesSearch = task.subject.toLowerCase().includes(this.searchQuery.toLowerCase()) ||
+                task.topic.toLowerCase().includes(this.searchQuery.toLowerCase());
+            const matchesPriority = this.filterPriority === 'all' || task.priority === this.filterPriority;
+            return matchesSearch && matchesPriority;
+        });
+
         // Sort by deadline (upcoming first), then by priority
-        const sortedTasks = [...this.tasks].sort((a, b) => {
+        const sortedTasks = filteredTasks.sort((a, b) => {
             if (a.completed !== b.completed) {
                 return a.completed ? 1 : -1;
             }
@@ -212,8 +282,13 @@ class TaskManager {
                 const tasksForSlot = this.getTasksForTimeSlot(day, hour);
                 if (tasksForSlot.length > 0) {
                     const task = tasksForSlot[0];
+                    const deadline = new Date(task.deadline);
+                    const now = new Date();
+                    const diffHours = (deadline - now) / (1000 * 60 * 60);
+                    const isUpcoming = diffHours >= 0 && diffHours <= 24 && !task.completed;
+
                     html += `<div class="timetable-cell">
-                        <div class="timetable-task" title="${this.escapeHtml(task.subject)}: ${this.escapeHtml(task.topic)}">
+                        <div class="timetable-task ${isUpcoming ? 'highlight' : ''}" title="${this.escapeHtml(task.subject)}: ${this.escapeHtml(task.topic)}">
                             ${this.escapeHtml(task.subject)}
                         </div>
                     </div>`;
@@ -227,15 +302,26 @@ class TaskManager {
     }
 
     getTasksForTimeSlot(dayOfWeek, hour) {
-        // Simple algorithm: distribute tasks across the week based on deadline
         return this.tasks.filter(task => {
             if (task.completed) return false;
 
             const deadline = new Date(task.deadline);
             const taskDay = deadline.getDay() || 7; // Convert Sunday (0) to 7
-            const taskHour = deadline.getHours();
 
-            return taskDay === dayOfWeek && Math.abs(taskHour - hour) <= 1;
+            // Calculate start time
+            // We assume the task ends exactly at the deadline.
+            // If the task spans across days, this simple daily view might struggle, 
+            // but we'll focus on the target day for now.
+
+            if (taskDay !== dayOfWeek) return false;
+
+            const endHour = deadline.getHours() + (deadline.getMinutes() / 60);
+            const startHour = endHour - parseFloat(task.duration);
+
+            // Check if current slot 'hour' is within [start, end)
+            // We add 0.01 to avoid floating point misses on exact boundaries if needed,
+            // but generally we want: start <= hour < end
+            return hour >= startHour && hour < endHour;
         });
     }
 
@@ -281,8 +367,46 @@ class TaskManager {
 
         // Set minimum date for deadline to today
         const deadlineInput = document.getElementById('deadline');
-        const today = new Date().toISOString().split('T')[0];
-        deadlineInput.setAttribute('min', today);
+        const today = new Date();
+        today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
+        deadlineInput.setAttribute('min', today.toISOString().slice(0, 16));
+
+        // Theme Toggle
+        const themeCheckbox = document.getElementById('themeToggleCheckbox');
+        if (themeCheckbox) {
+            themeCheckbox.addEventListener('change', () => this.toggleTheme());
+        }
+
+        // Search & Filter
+        document.getElementById('taskSearch').addEventListener('input', (e) => {
+            this.searchQuery = e.target.value;
+            this.renderAllTasks();
+        });
+
+        document.getElementById('priorityFilter').addEventListener('change', (e) => {
+            this.filterPriority = e.target.value;
+            this.renderAllTasks();
+        });
+
+        // Export
+        document.getElementById('exportBtn').addEventListener('click', () => this.exportData());
+
+        // AI Smart Plan
+        document.getElementById('aiPlanBtn').addEventListener('click', () => this.generateSmartPlan());
+        document.getElementById('closeAiModal').addEventListener('click', () => {
+            document.getElementById('aiModal').classList.remove('active');
+        });
+        document.getElementById('aiModal').addEventListener('click', (e) => {
+            if (e.target.id === 'aiModal') {
+                document.getElementById('aiModal').classList.remove('active');
+            }
+        });
+
+        // Logout
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('click', () => this.logout());
+        }
     }
 
     switchSection(section) {
@@ -306,7 +430,8 @@ class TaskManager {
         // Set default deadline to tomorrow
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
-        document.getElementById('deadline').value = tomorrow.toISOString().split('T')[0];
+        tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
+        document.getElementById('deadline').value = tomorrow.toISOString().slice(0, 16);
     }
 
     closeModal() {
@@ -327,6 +452,51 @@ class TaskManager {
         this.closeModal();
     }
 
+    exportData() {
+        const dataStr = JSON.stringify(this.tasks, null, 2);
+        const dataUri = 'data:application/json;charset=utf-8,' + encodeURIComponent(dataStr);
+
+        const exportFileDefaultName = 'study_plan_tasks.json';
+
+        const linkElement = document.createElement('a');
+        linkElement.setAttribute('href', dataUri);
+        linkElement.setAttribute('download', exportFileDefaultName);
+        linkElement.click();
+    }
+
+    generateSmartPlan() {
+        const pendingTasks = this.tasks.filter(t => !t.completed);
+
+        if (pendingTasks.length === 0) {
+            this.showToast('No pending tasks to plan!');
+            return;
+        }
+
+        // Heuristic Algorithm
+        // Score = Priority(High=3, Med=2, Low=1) * 10 - DaysUntilDeadline
+        const priorityScore = { 'high': 3, 'medium': 2, 'low': 1 };
+
+        const rankedTasks = pendingTasks.map(task => {
+            const deadline = new Date(task.deadline);
+            const now = new Date();
+            const hoursUntil = (deadline - now) / (1000 * 60 * 60);
+            const daysUntil = hoursUntil / 24;
+
+            let score = priorityScore[task.priority] * 10;
+            if (hoursUntil < 0) score += 50; // Overdue is highest priority
+            else if (hoursUntil < 24) score += 20; // Due today
+
+            score -= daysUntil; // Closer deadline = higher score
+
+            return { task, score };
+        }).sort((a, b) => b.score - a.score);
+
+        const topTasks = rankedTasks.slice(0, 5).map(item => item.task);
+
+        this.renderTaskList('aiPlanList', topTasks);
+        document.getElementById('aiModal').classList.add('active');
+    }
+
     // Utility Methods
     showToast(message) {
         const toast = document.getElementById('toast');
@@ -340,7 +510,7 @@ class TaskManager {
 
     formatDate(dateString) {
         const date = new Date(dateString);
-        const options = { month: 'short', day: 'numeric', year: 'numeric' };
+        const options = { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' };
         return date.toLocaleDateString('en-US', options);
     }
 
@@ -365,4 +535,14 @@ let taskManager;
 
 document.addEventListener('DOMContentLoaded', () => {
     taskManager = new TaskManager();
+
+    // Handle Login Form if present
+    const loginForm = document.getElementById('loginForm');
+    if (loginForm) {
+        loginForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const email = document.getElementById('userEmail').value;
+            taskManager.login(email);
+        });
+    }
 });

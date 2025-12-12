@@ -89,6 +89,11 @@ class TaskManager {
 
     // Task CRUD Operations
     addTask(taskData) {
+        if (this.currentEditId) {
+            this.updateTask(taskData);
+            return;
+        }
+
         const task = {
             id: Date.now().toString(),
             subject: taskData.subject,
@@ -96,25 +101,53 @@ class TaskManager {
             duration: parseFloat(taskData.duration),
             priority: taskData.priority,
             deadline: taskData.deadline,
+            startDate: taskData.startDate || new Date(new Date(taskData.deadline).getTime() - (parseFloat(taskData.duration) * 60 * 60 * 1000)).toISOString(),
             completed: false,
             createdAt: new Date().toISOString()
         };
 
         this.tasks.push(task);
         this.saveTasks();
-        this.renderDashboard();
-        this.renderAllTasks();
-        this.renderTimetable();
+        this.renderAll();
         this.showToast('Task added successfully!');
     }
 
+    updateTask(taskData) {
+        const index = this.tasks.findIndex(t => t.id === this.currentEditId);
+        if (index !== -1) {
+            this.tasks[index] = {
+                ...this.tasks[index],
+                subject: taskData.subject,
+                topic: taskData.topic,
+                duration: parseFloat(taskData.duration),
+                priority: taskData.priority,
+                deadline: taskData.deadline,
+                startDate: new Date(new Date(taskData.deadline).getTime() - (parseFloat(taskData.duration) * 60 * 60 * 1000)).toISOString()
+            };
+            this.saveTasks();
+            this.renderAll();
+            this.showToast('Task updated successfully!');
+        }
+        this.currentEditId = null;
+    }
+
     deleteTask(id) {
-        this.tasks = this.tasks.filter(task => task.id !== id);
-        this.saveTasks();
-        this.renderDashboard();
-        this.renderAllTasks();
-        this.renderTimetable();
-        this.showToast('Task deleted successfully!');
+        this.taskToDeleteId = id;
+        document.getElementById('deleteConfirmModal').classList.add('active');
+    }
+
+    confirmDeleteTask() {
+        if (this.taskToDeleteId) {
+            this.tasks = this.tasks.filter(task => task.id !== this.taskToDeleteId);
+            this.saveTasks();
+            this.renderAll();
+            this.showToast('Task deleted successfully!');
+            this.taskToDeleteId = null;
+            document.getElementById('deleteConfirmModal').classList.remove('active');
+
+            // Also close view modal if open
+            document.getElementById('viewTaskModal').classList.remove('active');
+        }
     }
 
     toggleComplete(id) {
@@ -122,11 +155,23 @@ class TaskManager {
         if (task) {
             task.completed = !task.completed;
             this.saveTasks();
-            this.renderDashboard();
-            this.renderAllTasks();
-            this.renderTimetable();
+            this.renderAll();
             this.showToast(task.completed ? 'Task completed! 🎉' : 'Task marked as pending');
         }
+    }
+
+    editTask(id) {
+        const task = this.tasks.find(t => t.id === id);
+        if (task) {
+            this.currentEditId = id;
+            this.openModal(task);
+        }
+    }
+
+    renderAll() {
+        this.renderDashboard();
+        this.renderAllTasks();
+        this.renderTimetable();
     }
 
     // Statistics Calculations
@@ -220,6 +265,12 @@ class TaskManager {
                         <p class="task-topic">${this.escapeHtml(task.topic)}</p>
                     </div>
                     <div class="task-actions">
+                        <button class="task-btn" onclick="taskManager.editTask('${task.id}')" aria-label="Edit task">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
                         <button class="task-btn complete-btn" onclick="taskManager.toggleComplete('${task.id}')" aria-label="Toggle complete">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                                 ${task.completed
@@ -263,7 +314,8 @@ class TaskManager {
     renderTimetable() {
         const timetable = document.getElementById('timetable');
         const days = ['Time', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-        const hours = Array.from({ length: 17 }, (_, i) => i + 6); // 6 AM to 10 PM
+        // 8 AM to 6 PM (18:00)
+        const hours = Array.from({ length: 11 }, (_, i) => i + 8);
 
         let html = '';
 
@@ -280,21 +332,21 @@ class TaskManager {
             // Day columns
             for (let day = 1; day <= 7; day++) {
                 const tasksForSlot = this.getTasksForTimeSlot(day, hour);
-                if (tasksForSlot.length > 0) {
-                    const task = tasksForSlot[0];
-                    const deadline = new Date(task.deadline);
-                    const now = new Date();
-                    const diffHours = (deadline - now) / (1000 * 60 * 60);
-                    const isUpcoming = diffHours >= 0 && diffHours <= 24 && !task.completed;
+                html += `<div class="timetable-cell">`;
 
-                    html += `<div class="timetable-cell">
-                        <div class="timetable-task ${isUpcoming ? 'highlight' : ''}" title="${this.escapeHtml(task.subject)}: ${this.escapeHtml(task.topic)}">
+                tasksForSlot.forEach(task => {
+                    const deadline = new Date(task.deadline);
+                    const isUpcoming = !task.completed; // Simplified highlight logic
+
+                    html += `
+                        <div class="timetable-task ${isUpcoming ? 'highlight' : ''}" 
+                             onclick="taskManager.openViewTaskModal('${task.id}')"
+                             title="${this.escapeHtml(task.subject)}: ${this.escapeHtml(task.topic)}">
                             ${this.escapeHtml(task.subject)}
-                        </div>
-                    </div>`;
-                } else {
-                    html += `<div class="timetable-cell"></div>`;
-                }
+                        </div>`;
+                });
+
+                html += `</div>`;
             }
         });
 
@@ -306,22 +358,43 @@ class TaskManager {
             if (task.completed) return false;
 
             const deadline = new Date(task.deadline);
-            const taskDay = deadline.getDay() || 7; // Convert Sunday (0) to 7
+            // End time is the deadline
+            const endTime = deadline.getTime();
+            // Start time is deadline - duration (hours converted to ms)
+            const startTime = endTime - (task.duration * 60 * 60 * 1000);
 
-            // Calculate start time
-            // We assume the task ends exactly at the deadline.
-            // If the task spans across days, this simple daily view might struggle, 
-            // but we'll focus on the target day for now.
+            // Current slot time calculation
+            // We need to map "DayOfWeek + Hour" to a concrete timestamp for this week?
+            // "Weekly Timetable" usually implies a generic week or "This Week".
+            // Since tasks have specific dates, we should only show tasks that fall in THIS week?
+            // Or just map based on Day Index ignoring the specific Date (recurring-ish)?
+            // The prompt asks for "Timetable", usually implies specific dates in a productivity app.
 
-            if (taskDay !== dayOfWeek) return false;
+            // Let's match the DAY index of the task. 
+            // If a task covers Mon-Wed, it should show on Mon, Tue, Wed.
 
-            const endHour = deadline.getHours() + (deadline.getMinutes() / 60);
-            const startHour = endHour - parseFloat(task.duration);
+            // To properly check if "This Slot" is inside "Task Range":
+            // We need to know the date of "This Slot".
+            // Let's assume the timetable shows the Current Week (Mon-Sun).
 
-            // Check if current slot 'hour' is within [start, end)
-            // We add 0.01 to avoid floating point misses on exact boundaries if needed,
-            // but generally we want: start <= hour < end
-            return hour >= startHour && hour < endHour;
+            const now = new Date();
+            const currentDayIndex = now.getDay() || 7; // 1-7
+
+            // Calculate the date for the column 'dayOfWeek'
+            // date = now - (current - target) * days
+            const targetDate = new Date(now);
+            targetDate.setDate(now.getDate() - (currentDayIndex - dayOfWeek));
+            targetDate.setHours(hour, 0, 0, 0);
+
+            const slotStart = targetDate.getTime();
+            const slotEnd = slotStart + (60 * 60 * 1000); // 1 hour slot
+
+            // Check overlap
+            // Task: [start, end]
+            // Slot: [slotStart, slotEnd]
+            // Overlap if (Start < SlotEnd) and (End > SlotStart)
+
+            return (startTime < slotEnd) && (endTime > slotStart);
         });
     }
 
@@ -343,12 +416,24 @@ class TaskManager {
         // Modal Controls
         document.getElementById('closeModal').addEventListener('click', () => this.closeModal());
         document.getElementById('cancelBtn').addEventListener('click', () => this.closeModal());
-
-        // Close modal on outside click
         document.getElementById('taskModal').addEventListener('click', (e) => {
-            if (e.target.id === 'taskModal') {
-                this.closeModal();
-            }
+            if (e.target.id === 'taskModal') this.closeModal();
+        });
+
+        // Delete Modal Controls
+        document.getElementById('closeDeleteModal').addEventListener('click', () => {
+            document.getElementById('deleteConfirmModal').classList.remove('active');
+            this.taskToDeleteId = null;
+        });
+        document.getElementById('cancelDeleteBtn').addEventListener('click', () => {
+            document.getElementById('deleteConfirmModal').classList.remove('active');
+            this.taskToDeleteId = null;
+        });
+        document.getElementById('confirmDeleteBtn').addEventListener('click', () => this.confirmDeleteTask());
+
+        // View Modal Controls
+        document.getElementById('closeViewModal').addEventListener('click', () => {
+            document.getElementById('viewTaskModal').classList.remove('active');
         });
 
         // Form Submit
@@ -358,14 +443,22 @@ class TaskManager {
         });
 
         // Sidebar Toggle (mobile)
-        const sidebarToggle = document.getElementById('sidebarToggle');
-        const sidebar = document.getElementById('sidebar');
-
-        sidebarToggle.addEventListener('click', () => {
-            sidebar.classList.toggle('active');
+        document.getElementById('sidebarToggle').addEventListener('click', () => {
+            document.getElementById('sidebar').classList.toggle('active');
         });
 
-        // Set minimum date for deadline to today
+        // Profile / Logout
+        const profileBtn = document.getElementById('profileBtn');
+        if (profileBtn) {
+            profileBtn.addEventListener('click', () => this.openProfileModal());
+        }
+
+        document.getElementById('closeProfileModal').addEventListener('click', () => {
+            document.getElementById('profileModal').classList.remove('active');
+        });
+        document.getElementById('modalLogoutBtn').addEventListener('click', () => this.logout());
+
+        // Helper: Set minimum date for deadline to today
         const deadlineInput = document.getElementById('deadline');
         const today = new Date();
         today.setMinutes(today.getMinutes() - today.getTimezoneOffset());
@@ -401,41 +494,111 @@ class TaskManager {
                 document.getElementById('aiModal').classList.remove('active');
             }
         });
-
-        // Logout
-        const logoutBtn = document.getElementById('logoutBtn');
-        if (logoutBtn) {
-            logoutBtn.addEventListener('click', () => this.logout());
-        }
     }
 
     switchSection(section) {
-        // Update navigation
         document.querySelectorAll('.nav-item').forEach(item => {
             item.classList.remove('active');
+            if (item.dataset.section === section) item.classList.add('active');
         });
-        document.querySelector(`[data-section="${section}"]`).classList.add('active');
 
-        // Update content
         document.querySelectorAll('.content-section').forEach(sec => {
             sec.classList.remove('active');
         });
         document.getElementById(`${section}-section`).classList.add('active');
     }
 
-    openModal() {
+    openModal(task = null) {
         document.getElementById('taskModal').classList.add('active');
-        document.getElementById('taskForm').reset();
+        const form = document.getElementById('taskForm');
+        const title = document.getElementById('modalTitle');
 
-        // Set default deadline to tomorrow
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
-        document.getElementById('deadline').value = tomorrow.toISOString().slice(0, 16);
+        if (task) {
+            // Edit Mode
+            title.textContent = 'Edit Task';
+            form.subject.value = task.subject;
+            form.topic.value = task.topic;
+            form.duration.value = task.duration;
+            form.priority.value = task.priority;
+            form.deadline.value = task.deadline;
+        } else {
+            // Add Mode
+            title.textContent = 'Add New Task';
+            form.reset();
+            this.currentEditId = null;
+
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setMinutes(tomorrow.getMinutes() - tomorrow.getTimezoneOffset());
+            document.getElementById('deadline').value = tomorrow.toISOString().slice(0, 16);
+        }
     }
 
     closeModal() {
         document.getElementById('taskModal').classList.remove('active');
+        this.currentEditId = null;
+    }
+
+    openViewTaskModal(id) {
+        const task = this.tasks.find(t => t.id === id);
+        if (!task) return;
+
+        const modal = document.getElementById('viewTaskModal');
+        const body = document.getElementById('viewTaskBody');
+        const completeBtn = document.getElementById('viewCompleteBtn');
+        const uncompleteBtn = document.getElementById('viewUncompleteBtn');
+        const editBtn = document.getElementById('viewEditBtn');
+
+        body.innerHTML = `
+            <div style="margin-bottom: 1rem;">
+                <h4 style="font-size: 1.1rem; margin-bottom: 0.5rem;">${this.escapeHtml(task.subject)}</h4>
+                <p style="color: var(--text-secondary);">${this.escapeHtml(task.topic)}</p>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.9rem;">
+                <div>
+                    <strong>Priority:</strong> <span class="priority-badge ${task.priority}">${task.priority}</span>
+                </div>
+                <div>
+                    <strong>Duration:</strong> ${task.duration}h
+                </div>
+                <div>
+                    <strong>Deadline:</strong> ${this.formatDate(task.deadline)}
+                </div>
+                <div>
+                    <strong>Status:</strong> ${task.completed ? 'Completed' : 'Pending'}
+                </div>
+            </div>
+        `;
+
+        // Update buttons
+        if (task.completed) {
+            completeBtn.style.display = 'none';
+            uncompleteBtn.style.display = 'inline-block';
+            uncompleteBtn.onclick = () => {
+                this.toggleComplete(id);
+                this.openViewTaskModal(id); // Re-render logic
+            };
+        } else {
+            completeBtn.style.display = 'inline-block';
+            uncompleteBtn.style.display = 'none';
+            completeBtn.onclick = () => {
+                this.toggleComplete(id);
+                this.openViewTaskModal(id);
+            };
+        }
+
+        editBtn.onclick = () => {
+            modal.classList.remove('active');
+            this.editTask(id);
+        };
+
+        modal.classList.add('active');
+    }
+
+    openProfileModal() {
+        const email = localStorage.getItem('myStudyPlanUser') || 'Guest';
+        document.getElementById('profileEmail').textContent = email;
+        document.getElementById('profileModal').classList.add('active');
     }
 
     handleFormSubmit(e) {
@@ -447,6 +610,7 @@ class TaskManager {
             priority: formData.get('priority'),
             deadline: formData.get('deadline')
         };
+        // Start date handled in addTask/updateTask logic
 
         this.addTask(taskData);
         this.closeModal();
@@ -528,13 +692,100 @@ class TaskManager {
 }
 
 // ===========================
+// AI Assistant
+// ===========================
+
+class AiAssistant {
+    constructor() {
+        this.isOpen = false;
+        this.chatToggle = document.getElementById('chatToggle');
+        this.chatWindow = document.getElementById('chatWindow');
+        this.chatClose = document.getElementById('chatClose');
+        this.chatForm = document.getElementById('chatForm');
+        this.chatInput = document.getElementById('chatInput');
+        this.chatMessages = document.getElementById('chatMessages');
+
+        this.init();
+    }
+
+    init() {
+        if (!this.chatToggle) return;
+
+        this.chatToggle.addEventListener('click', () => this.toggleChat());
+        this.chatClose.addEventListener('click', () => this.toggleChat());
+        this.chatForm.addEventListener('submit', (e) => this.handleMessage(e));
+    }
+
+    toggleChat() {
+        this.isOpen = !this.isOpen;
+        this.chatWindow.classList.toggle('active', this.isOpen);
+        if (this.isOpen) {
+            this.chatInput.focus();
+        }
+    }
+
+    handleMessage(e) {
+        e.preventDefault();
+        const text = this.chatInput.value.trim();
+        if (!text) return;
+
+        // Add user message
+        this.addMessage(text, 'user');
+        this.chatInput.value = '';
+
+        // Simulate AI thinking and response
+        setTimeout(() => {
+            const response = this.generateResponse(text);
+            this.addMessage(response, 'ai');
+        }, 600);
+    }
+
+    addMessage(text, sender) {
+        const div = document.createElement('div');
+        div.className = `message ${sender}-message`;
+        div.textContent = text;
+        this.chatMessages.appendChild(div);
+        this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+    }
+
+    generateResponse(text) {
+        const lower = text.toLowerCase();
+
+        if (lower.includes('hello') || lower.includes('hi')) {
+            return "Hello! I'm here to help you study. Try asking for a plan or advice on a subject.";
+        }
+        if (lower.includes('plan') || lower.includes('schedule')) {
+            return "I can help you plan! Check out the Smart Plan feature in the dashboard, or tell me what subjects you have pending.";
+        }
+        if (lower.includes('math') || lower.includes('calculus')) {
+            return "Math requires practice! I suggest breaking down problems into smaller steps and setting a timer for 25 minutes (Pomodoro technique).";
+        }
+        if (lower.includes('tired') || lower.includes('break')) {
+            return "It's important to rest! Take a 5-10 minute break. Stretch, drink water, or walk around.";
+        }
+        if (lower.includes('thank')) {
+            return "You're welcome! Keep up the good work.";
+        }
+
+        const genericResponses = [
+            "That sounds important. Have you broken it down into smaller tasks?",
+            "Make sure to prioritize your most urgent deadlines first.",
+            "Remember to stay hydrated while studying!",
+            "I've noted that. Is there anything else you need help organizing?"
+        ];
+
+        return genericResponses[Math.floor(Math.random() * genericResponses.length)];
+    }
+}
+
+// ===========================
 // Initialize Application
 // ===========================
 
-let taskManager;
-
 document.addEventListener('DOMContentLoaded', () => {
-    taskManager = new TaskManager();
+    // Assign to window to ensure access from inline HTML event handlers
+    window.taskManager = new TaskManager();
+    window.aiAssistant = new AiAssistant();
 
     // Handle Login Form if present
     const loginForm = document.getElementById('loginForm');
@@ -542,7 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loginForm.addEventListener('submit', (e) => {
             e.preventDefault();
             const email = document.getElementById('userEmail').value;
-            taskManager.login(email);
+            window.taskManager.login(email);
         });
     }
 });
